@@ -1,0 +1,21 @@
+{
+    "name": "arrocy/ez-whatsapp",
+    "description": "Whatsapp package for arrocy/ez-dashboard ecosystem.",
+    "autoload": {
+        "psr-4": {
+            "Arrocy\\Whatsapp\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Arrocy\\Whatsapp\\WhatsappServiceProvider"
+            ]
+        }
+    },
+    "require": {
+        "php": "^8.3",
+        "illuminate/database": "^13.0",
+        "illuminate/support": "^13.0"
+    }
+}
