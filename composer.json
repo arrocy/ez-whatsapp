@@ -1,6 +1,8 @@
 {
     "name": "arrocy/ez-whatsapp",
-    "description": "Whatsapp package for arrocy/ez-dashboard ecosystem.",
+    "type": "library",
+    "description": "Whatsapp plugin for arrocy/ez-dashboard ecosystem.",
+    "license": "GPL-2.0-or-later",
     "autoload": {
         "psr-4": {
             "Arrocy\\Whatsapp\\": "src/"
