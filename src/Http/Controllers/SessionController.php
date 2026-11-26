@@ -24,7 +24,7 @@ class SessionController extends Controller
 
         if (is_string($accessToken) && $accessToken !== '') {
             try {
-                $sessions = $client->sessions();
+                $sessions = $client->getSessions();
 
                 foreach ($sessions as $sessionData) {
                     $this->syncSession($sessionData, auth()->id());

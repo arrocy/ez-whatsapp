@@ -4,11 +4,106 @@ namespace Arrocy\Whatsapp\Services;
 
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
 class ApiClient
 {
+    /**
+     * @return array<string, mixed>
+     */
+    private function json(Response $response): array
+    {
+        $response->throw();
+        $data = $response->json();
+
+        if (! is_array($data)) {
+            throw new RuntimeException('The Node API returned an invalid JSON response.');
+        }
+
+        return $data;
+    }
+
+    private function request(?string $accessToken = null): PendingRequest
+    {
+        $apiUrl = rtrim((string) config('whatsapp.api_url'), '/');
+
+        if ($apiUrl === '') {
+            throw new RuntimeException('The Node API URL is not configured.');
+        }
+
+        $request = Http::acceptJson()
+            ->baseUrl($apiUrl)
+            ->connectTimeout(3)
+            ->timeout(20);
+
+        if ($accessToken === null) {
+            return $request;
+        }
+
+        return $request->withToken($accessToken);
+
+        // $headers = ['X-API-Key' => $accessToken];
+        // return $request->withHeaders($headers);
+    }
+
+    /**
+     * @param  array<string, array<int, string>|string>  $headers
+     */
+    public function forward(
+        string $method,
+        string $path,
+        ?string $bearerToken,
+        ?string $apiKey,
+        ?string $queryString,
+        string $body,
+        ?string $contentType,
+        array $headers,
+        ?UploadedFile $upload = null,
+    ): Response {
+        $url = $path.($queryString === null || $queryString === '' ? '' : '?'.$queryString);
+        $request = $this->request($bearerToken)
+            ->withOptions(['stream' => true])
+            ->replaceHeaders($headers);
+
+        if ($apiKey !== null && $apiKey !== '') {
+            $request = $request->replaceHeaders(['X-API-Key' => $apiKey]);
+        }
+
+        if ($upload !== null) {
+            $filePath = $upload->getRealPath();
+
+            if (! is_string($filePath)) {
+                throw new RuntimeException('The uploaded plugin archive could not be read.');
+            }
+
+            $fileStream = fopen($filePath, 'rb');
+
+            if (! is_resource($fileStream)) {
+                throw new RuntimeException('The uploaded plugin archive could not be opened.');
+            }
+
+            try {
+                $uploadHeaders = array_filter([
+                    'Content-Type' => $upload->getMimeType(),
+                ]);
+
+                return $request
+                    ->attach('file', $fileStream, $upload->getClientOriginalName(), $uploadHeaders)
+                    ->send($method, $url, ['multipart' => []]);
+            } finally {
+                fclose($fileStream);
+            }
+        }
+
+        if ($body !== '') {
+            $request = $request->withBody($body, $contentType ?? 'application/octet-stream');
+        }
+
+        return $request->send($method, $url);
+    }
+
     /**
      * @param  array{name: string}  $data
      * @return array{id: string, name: string, apiKey: string}
@@ -31,43 +126,9 @@ class ApiClient
     }
 
     /**
-     * @param  array{name?: string, email?: string, currentPassword?: string, newPassword?: string}  $data
-     * @return array<string, mixed>
-     */
-    public function updateProfile(array $data): array
-    {
-        $accessToken = setting('access_token');
-        $profileName = $data['profile_name'] ?? null;
-        $profileStatus = $data['profile_status'] ?? null;
-        $profilePictureUrl = $data['profile_picture_url'] ?? null;
-        $profilePictureBase64 = $data['profile_picture_base64'] ?? null;
-        $updated = [];
-
-        if ($profileName) {
-            $updated[] = $this->json($this->request($accessToken)->put('/api/sessions/'.rawurlencode($sessionId).'/profile/name', ['name' => $profileName]));
-        }
-        if ($profileStatus) {
-            $updated[] = $this->json($this->request($accessToken)->put('/api/sessions/'.rawurlencode($sessionId).'/profile/status', ['status' => $profileStatus]));
-        }
-        if ($profilePictureUrl) {
-            $updated[] = $this->json($this->request($accessToken)->put('/api/sessions/'.rawurlencode($sessionId).'/profile/picture', [
-                'url' => $profilePictureUrl,
-                'mimetype' => 'image/jpeg',
-            ]));
-        } elseif ($profilePictureBase64) {
-            $updated[] = $this->json($this->request($accessToken)->put('/api/sessions/'.rawurlencode($sessionId).'/profile/picture', [
-                'base64' => $profilePictureBase64,
-                'mimetype' => 'image/jpeg',
-            ]));
-        }
-
-        return $updated;
-    }
-
-    /**
      * @return list<array<string, mixed>>
      */
-    public function sessions(): array
+    public function getSessions(): array
     {
         $accessToken = setting('access_token');
 
@@ -213,40 +274,36 @@ class ApiClient
     }
 
     /**
+     * @param  array{name?: string, email?: string, currentPassword?: string, newPassword?: string}  $data
      * @return array<string, mixed>
      */
-    private function json(Response $response): array
+    public function updateProfile(string $sessionId, array $data): array
     {
-        $response->throw();
-        $data = $response->json();
+        $accessToken = setting('access_token');
+        $profileName = $data['profile_name'] ?? null;
+        $profileStatus = $data['profile_status'] ?? null;
+        $profilePictureUrl = $data['profile_picture_url'] ?? null;
+        $profilePictureBase64 = $data['profile_picture_base64'] ?? null;
+        $updated = [];
 
-        if (! is_array($data)) {
-            throw new RuntimeException('The Node API returned an invalid JSON response.');
+        if ($profileName) {
+            $updated[] = $this->json($this->request($accessToken)->put('/api/sessions/'.rawurlencode($sessionId).'/profile/name', ['name' => $profileName]));
+        }
+        if ($profileStatus) {
+            $updated[] = $this->json($this->request($accessToken)->put('/api/sessions/'.rawurlencode($sessionId).'/profile/status', ['status' => $profileStatus]));
+        }
+        if ($profilePictureUrl) {
+            $updated[] = $this->json($this->request($accessToken)->put('/api/sessions/'.rawurlencode($sessionId).'/profile/picture', [
+                'url' => $profilePictureUrl,
+                'mimetype' => 'image/jpeg',
+            ]));
+        } elseif ($profilePictureBase64) {
+            $updated[] = $this->json($this->request($accessToken)->put('/api/sessions/'.rawurlencode($sessionId).'/profile/picture', [
+                'base64' => $profilePictureBase64,
+                'mimetype' => 'image/jpeg',
+            ]));
         }
 
-        return $data;
-    }
-
-    private function request(?string $accessToken = null): PendingRequest
-    {
-        $apiUrl = rtrim((string) config('whatsapp.api_url'), '/');
-
-        if ($apiUrl === '') {
-            throw new RuntimeException('The Node API URL is not configured.');
-        }
-
-        $request = Http::acceptJson()
-            ->baseUrl($apiUrl)
-            ->connectTimeout(3)
-            ->timeout(20);
-
-        if ($accessToken === null) {
-            return $request;
-        }
-
-        return $request->withToken($accessToken);
-
-        // $headers = ['X-API-Key' => $accessToken];
-        // return $request->withHeaders($headers);
+        return $updated;
     }
 }

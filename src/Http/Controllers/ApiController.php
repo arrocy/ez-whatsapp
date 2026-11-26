@@ -7,10 +7,12 @@ use Arrocy\AiBot\Models\AiBot;
 use Arrocy\Template\Models\Template;
 use Arrocy\Whatsapp\Models\Session;
 use Arrocy\Whatsapp\Services\ApiClient;
+use Arrocy\Whatsapp\Support\ApiEndpointMap;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -19,10 +21,206 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
+use Symfony\Component\HttpFoundation\Response;
 
 class ApiController extends Controller
 {
     public function __construct(private readonly ApiClient $client) {}
+
+    public function docs(Request $request)
+    {
+        $endpointGroups = [];
+        $operationCount = 0;
+
+        foreach (\Arrocy\Whatsapp\Support\ApiEndpointMap::ROUTES as $uri => $methods) {
+            if (Str::startsWith($uri, 'api/auth/api-keys')) continue;
+            $segments = explode('/', trim($uri, '/'));
+            $area = $segments[1] ?? __('Other');
+            $category = \Illuminate\Support\Str::headline($area);
+
+            if ($area === 'sessions') {
+                $resource = $segments[2] ?? null;
+
+                if ($resource === 'stats') {
+                    $category = __('Session statistics');
+                } elseif ($resource !== null && str_starts_with($resource, '{')) {
+                    $resource = $segments[3] ?? null;
+                    $category = $resource === null
+                        ? __('Sessions')
+                        : __('Sessions').' · '.\Illuminate\Support\Str::headline($resource);
+                }
+            }
+
+            foreach ($methods as $method) {
+                $endpointGroups[$category][] = [
+                    'method' => $method,
+                    'path' => '/'.$uri,
+                ];
+                $operationCount++;
+            }
+        }
+
+        ksort($endpointGroups);
+
+        return view('whatsapp::api-docs.index', compact('endpointGroups', 'operationCount'));
+    }
+
+    private const HOP_BY_HOP_HEADERS = [
+        'connection',
+        'keep-alive',
+        'proxy-authenticate',
+        'proxy-authorization',
+        'te',
+        'trailer',
+        'transfer-encoding',
+        'upgrade',
+    ];
+
+    private const RESPONSE_HEADERS = [
+        'cache-control',
+        'content-disposition',
+        'content-type',
+        'etag',
+        'expires',
+        'last-modified',
+        'location',
+        'retry-after',
+        'vary',
+        'www-authenticate',
+        'x-ratelimit-limit',
+        'x-ratelimit-remaining',
+        'x-ratelimit-reset',
+        'x-request-id',
+    ];
+
+    public function forward(Request $request): Response
+    {
+        $route = $request->route();
+        $routeUri = $route->uri();
+        $bearerToken = null;
+        $apiKey = null;
+
+        if ($routeUri === ApiEndpointMap::METRICS_ROUTE) {
+            $bearerToken = $request->bearerToken();
+        } elseif (! in_array($routeUri, ApiEndpointMap::NO_API_KEY, true)) {
+            $apiKey = $request->header('X-API-Key') ?? $request->bearerToken();
+        }
+
+        if (is_string($apiKey)) {
+            $apiKey = trim($apiKey);
+            $apiKey = $apiKey === '' ? null : $apiKey;
+        }
+
+        if (is_string($bearerToken)) {
+            $bearerToken = trim($bearerToken);
+            $bearerToken = $bearerToken === '' ? null : $bearerToken;
+        }
+
+        $isIngress = str_starts_with($routeUri, 'api/ingress/');
+        $upload = $request->file('file');
+
+        if (! $upload instanceof UploadedFile) {
+            $upload = null;
+        } elseif (! $upload->isValid()) {
+            return response()->json(['message' => 'The uploaded file is invalid.'], 422);
+        }
+
+        try {
+            $upstreamResponse = $this->client->forward(
+                $request->method(),
+                $request->getPathInfo(),
+                $bearerToken,
+                $apiKey,
+                $request->getQueryString(),
+                $request->getContent(),
+                $request->header('Content-Type'),
+                $this->requestHeaders($request, $isIngress),
+                $upload,
+            );
+        } catch (ConnectionException $exception) {
+            Log::warning('The ArrocyWA API could not be reached.', [
+                'method' => $request->method(),
+                'route' => $routeUri,
+                'exception' => $exception::class,
+            ]);
+
+            return response()->json(['message' => 'The upstream API is unavailable.'], 502);
+        }
+
+        return response()->stream(
+            static function () use ($upstreamResponse): void {
+                fpassthru($upstreamResponse->resource());
+            },
+            $upstreamResponse->status(),
+            $this->responseHeaders($upstreamResponse->headers(), $isIngress),
+        );
+    }
+
+    /**
+     * @return array<string, array<int, string>>
+     */
+    private function requestHeaders(Request $request, bool $isIngress): array
+    {
+        $headers = [];
+        $allowedHeaders = ['accept', 'content-encoding', 'idempotency-key', 'x-request-id'];
+
+        foreach ($request->headers->all() as $name => $values) {
+            $lowerName = Str::lower($name);
+
+            if (in_array($lowerName, self::HOP_BY_HOP_HEADERS, true)
+                || in_array($lowerName, ['host', 'content-length', 'cookie', 'forwarded'], true)
+                || str_starts_with($lowerName, 'x-forwarded-')) {
+                continue;
+            }
+
+            if (! $isIngress && ! in_array($lowerName, $allowedHeaders, true)) {
+                continue;
+            }
+
+            $normalizedName = match ($lowerName) {
+                'accept' => 'Accept',
+                'authorization' => 'Authorization',
+                'content-encoding' => 'Content-Encoding',
+                'idempotency-key' => 'Idempotency-Key',
+                'x-api-key' => 'X-API-Key',
+                'x-request-id' => 'X-Request-Id',
+                default => implode('-', array_map('ucfirst', explode('-', $lowerName))),
+            };
+            $headers[$normalizedName] = $values;
+        }
+
+        return $headers;
+    }
+
+    /**
+     * @param  array<string, array<int, string>>  $upstreamHeaders
+     * @return array<string, array<int, string>>
+     */
+    private function responseHeaders(array $upstreamHeaders, bool $isIngress): array
+    {
+        $headers = [];
+        $blockedHeaders = [
+            ...self::HOP_BY_HOP_HEADERS,
+            'content-length',
+            'set-cookie',
+        ];
+
+        foreach ($upstreamHeaders as $name => $values) {
+            $lowerName = Str::lower($name);
+
+            if (in_array($lowerName, $blockedHeaders, true)) {
+                continue;
+            }
+
+            if (! $isIngress && ! in_array($lowerName, self::RESPONSE_HEADERS, true)) {
+                continue;
+            }
+
+            $headers[$name] = $values;
+        }
+
+        return $headers;
+    }
 
     public function handle(Request $request): JsonResponse
     {

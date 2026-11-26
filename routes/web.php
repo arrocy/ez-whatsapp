@@ -5,6 +5,8 @@ use Arrocy\Whatsapp\Http\Controllers\SessionController;
 use Arrocy\Whatsapp\Http\Controllers\WhatsappController;
 use Illuminate\Support\Facades\Route;
 
+Route::get('whatsapp/api-docs', [WhatsappController::class, 'apiDocs'])->name('whatsapp.api-docs');
+
 Route::middleware(['web', 'auth', 'verified'])->prefix('whatsapp')->name('whatsapp.')->group(function (): void {
     Route::get('/', [WhatsappController::class, 'index'])->name('index');
     Route::get('/apikey-signup', [WhatsappController::class, 'apikeySignUp'])->name('apikey-signup');

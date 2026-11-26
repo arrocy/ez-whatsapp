@@ -29,7 +29,8 @@ class WhatsappServiceProvider extends ServiceProvider
         if (isset($items)) {
             $sessions = ['label' => 'Sessions', 'icon' => 'fa-solid fa-mobile-screen', 'route' => 'whatsapp.session.index'];
             $sendMessage = ['label' => 'Send message', 'icon' => 'fa-solid fa-paper-plane', 'route' => 'whatsapp.send-message'];
-            $items[] = ['label' => 'Whatsapp', 'icon' => 'fa-brands fa-whatsapp', 'route' => 'whatsapp.*', 'children' => [$sessions, $sendMessage]];
+            $apiDocs = ['label' => 'API Docs', 'icon' => 'fa-solid fa-book', 'route' => 'whatsapp.api-docs', 'target' => '__blank'];
+            $items[] = ['label' => 'Whatsapp', 'icon' => 'fa-brands fa-whatsapp', 'route' => 'whatsapp.*', 'children' => [$sessions, $sendMessage, $apiDocs]];
             config(['menu.sidebar.workspace.items' => $items]);
         }
     }
