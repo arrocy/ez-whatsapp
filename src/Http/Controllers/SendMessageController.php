@@ -27,7 +27,7 @@ class SendMessageController extends Controller
 
         try {
             if (is_string($accessToken) && $accessToken !== '') {
-                $sessions = $client->sessions();
+                $sessions = $client->getSessions();
             }
         } catch (ConnectionException|RequestException $exception) {
             Log::warning('Unable to load WhatsApp sessions from the Node API.', [
