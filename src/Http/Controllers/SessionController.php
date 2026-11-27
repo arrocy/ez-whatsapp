@@ -25,10 +25,9 @@ class SessionController extends Controller
         if (is_string($accessToken) && $accessToken !== '') {
             try {
                 $sessions = $client->getSessions();
-
-                foreach ($sessions as $sessionData) {
-                    $this->syncSession($sessionData, auth()->id());
-                }
+                // filter out sessions that are not in the database for the current user
+                $dbSessions = Session::query()->where('user_id', auth()->id())->pluck('id')->toArray();
+                $sessions = array_filter($sessions, static fn (array $session): bool => in_array($session['id'] ?? null, $dbSessions, true));
             } catch (ConnectionException|RequestException $exception) {
                 Log::warning('Unable to load WhatsApp sessions from the Node API.', [
                     'exception' => $exception::class,
@@ -49,34 +48,34 @@ class SessionController extends Controller
         ]);
 
         try {
-            $sessionData = $client->createSession($validated);
+            $session = $client->createSession($validated);
         } catch (ConnectionException|RequestException $exception) {
             return $this->redirectWithNodeError($exception);
         }
 
-        if (! isset($sessionData['id']) || ! is_string($sessionData['id'])) {
+        if (! isset($session['id']) || ! is_string($session['id'])) {
             throw new RuntimeException('The Node API did not return a session ID.');
         }
 
-        $this->syncSession($sessionData, auth()->id());
+        $this->syncSession($session, auth()->id());
 
-        return to_route('whatsapp.session.show', $sessionData['id'])
+        return to_route('whatsapp.session.show', $session['id'])
             ->with('success', __('Session created. Scan its QR code to connect WhatsApp.'));
     }
 
     public function show(string $sessionId, ApiClient $client): View|RedirectResponse
     {
         try {
-            $sessionData = $client->session($sessionId);
-            $session = $this->syncSession($sessionData, auth()->id());
+            $session = $client->session($sessionId);
+            $dbSession = Session::query()->where('id', $sessionId)->where('user_id', auth()->id())->findOrFail($sessionId);
         } catch (ConnectionException|RequestException $exception) {
             return $this->redirectWithNodeError($exception);
         }
 
-        $qrCode = ($sessionData['status'] ?? null) === 'qr_ready' ? session('session_qr_code') : null;
+        $qrCode = ($session['status'] ?? null) === 'qr_ready' ? session('session_qr_code') : null;
         $qrError = null;
 
-        if (($sessionData['status'] ?? null) === 'qr_ready' && (! is_string($qrCode) || $qrCode === '')) {
+        if (($session['status'] ?? null) === 'qr_ready' && (! is_string($qrCode) || $qrCode === '')) {
             try {
                 $qrResponse = $client->connectSession($sessionId);
                 $qrCode = $qrResponse['qrCode'] ?? null;
@@ -99,12 +98,12 @@ class SessionController extends Controller
             ->get(['name'])
             ->reject(static fn (AiBot $aiBot): bool => $aiBot->name === 'templates');
 
-        return view('whatsapp::session.show', compact('sessionData', 'qrCode', 'qrError', 'session', 'aiBots'));
+        return view('whatsapp::session.show', compact('session', 'qrCode', 'qrError', 'dbSession', 'aiBots'));
     }
 
     public function updateChatbot(Request $request, string $sessionId): RedirectResponse
     {
-        $session = Session::query()
+        $dbSession = Session::query()
             ->where('user_id', auth()->id())
             ->findOrFail($sessionId);
         $aiNames = AiBot::query()
@@ -117,7 +116,7 @@ class SessionController extends Controller
             'chatbot' => ['present', 'nullable', 'string', Rule::in(array_merge(['templates'], $aiNames))],
         ]);
 
-        $session->update($validated);
+        $dbSession->update($validated);
 
         return to_route('whatsapp.session.show', $sessionId)
             ->with('success', __('Chatbot assignment updated.'));
@@ -146,7 +145,6 @@ class SessionController extends Controller
     {
         try {
             $sessionData = $client->startSession($sessionId);
-            $this->syncSession($sessionData, auth()->id());
         } catch (ConnectionException|RequestException $exception) {
             return $this->redirectWithNodeError($exception);
         }
@@ -158,7 +156,6 @@ class SessionController extends Controller
     {
         try {
             $sessionData = $client->stopSession($sessionId);
-            $this->syncSession($sessionData, auth()->id());
         } catch (ConnectionException|RequestException $exception) {
             return $this->redirectWithNodeError($exception);
         }
@@ -170,7 +167,6 @@ class SessionController extends Controller
     {
         try {
             $sessionData = $client->disconnectSession($sessionId);
-            $this->syncSession($sessionData, auth()->id());
         } catch (ConnectionException|RequestException $exception) {
             return $this->redirectWithNodeError($exception);
         }
@@ -202,10 +198,10 @@ class SessionController extends Controller
             throw new RuntimeException('The Node API did not return a session ID.');
         }
 
-        $existingSession = Session::query()->find($sessionId);
+        $dbSession = Session::query()->find($sessionId);
         $attributes = [];
 
-        if ($existingSession === null) {
+        if ($dbSession === null) {
             if ($userId === null) {
                 throw new RuntimeException('A user is required to persist a new WhatsApp session.');
             }

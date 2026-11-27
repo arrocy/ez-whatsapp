@@ -32,7 +32,7 @@
         </div>
         <div class="col-md-4">
             <x-button variant="dark" type="submit" class="w-100">
-                <i class="fa-solid fa-plus me-2"></i>@lang('Create device')
+                <i class="fa-solid fa-plus me-2"></i>@lang('Create session')
             </x-button>
         </div>
         </div>

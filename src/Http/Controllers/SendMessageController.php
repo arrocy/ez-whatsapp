@@ -5,6 +5,7 @@ namespace Arrocy\Whatsapp\Http\Controllers;
 use App\Http\Controllers\Controller;
 use Arrocy\Phonebook\Models\Phonebook;
 use Arrocy\Template\Models\Template;
+use Arrocy\Whatsapp\Models\Session;
 use Arrocy\Whatsapp\Services\ApiClient;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
@@ -28,6 +29,9 @@ class SendMessageController extends Controller
         try {
             if (is_string($accessToken) && $accessToken !== '') {
                 $sessions = $client->getSessions();
+                // filter out sessions that are not in the database for the current user
+                $dbSessions = Session::query()->where('user_id', auth()->id())->pluck('id')->toArray();
+                $sessions = array_filter($sessions, static fn (array $session): bool => in_array($session['id'] ?? null, $dbSessions, true));
             }
         } catch (ConnectionException|RequestException $exception) {
             Log::warning('Unable to load WhatsApp sessions from the Node API.', [
